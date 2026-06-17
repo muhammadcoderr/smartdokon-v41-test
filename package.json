@@ -1,0 +1,35 @@
+{
+  "name": "smartdokon",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "seed": "node src/core/seeding/run-basic-seed.js",
+    "backup:run": "node src/core/backup/run-backup.js",
+    "backup:restore": "node src/core/backup/restore-backup.js"
+  },
+  "author": "WeebDevs",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^1.7.9",
+    "bcryptjs": "^3.0.3",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "express-rate-limit": "^8.3.2",
+    "helmet": "^8.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "moment": "^2.30.1",
+    "mongoose": "^8.0.3",
+    "mongoose-paginate-v2": "^1.9.0",
+    "multer": "^2.0.2",
+    "node-cache": "^5.1.2",
+    "node-cron": "^3.0.3",
+    "node-telegram-bot-api": "^0.66.0",
+    "nodemon": "^3.0.2",
+    "uuid": "^11.1.0"
+  }
+}
