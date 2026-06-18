@@ -48,9 +48,13 @@ const backupDefinitions = [
 ];
 
 const isWindows = process.platform === "win32";
+const isVercel = process.env.VERCEL === "1";
+
 const defaultBackupRoot = isWindows
   ? path.join("C:\\", "smartdokon")
-  : path.join(process.cwd(), "backups", "smartdokon");
+  : isVercel
+    ? path.join(os.tmpdir(), "backups", "smartdokon")
+    : path.join(process.cwd(), "backups", "smartdokon");
 
 const resolveBackupRoot = () =>
   process.env.LOCAL_BACKUP_ROOT_DIR || process.env.BACKUP_ROOT_DIR || defaultBackupRoot;

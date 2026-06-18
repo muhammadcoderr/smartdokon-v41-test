@@ -1,11 +1,21 @@
 const fs = require("fs");
 const path = require("path");
+const os = require("os");
 
-const LOGS_DIR = path.join(process.cwd(), "logs");
+const isVercel = process.env.VERCEL === "1";
+const LOGS_DIR = isVercel 
+  ? path.join(os.tmpdir(), "logs") 
+  : path.join(process.cwd(), "logs");
 
 // Create logs directory if it doesn't exist
-if (!fs.existsSync(LOGS_DIR)) {
-  fs.mkdirSync(LOGS_DIR, { recursive: true });
+try {
+  if (!fs.existsSync(LOGS_DIR)) {
+    fs.mkdirSync(LOGS_DIR, { recursive: true });
+  }
+} catch (error) {
+  if (!isVercel) {
+    console.error("Failed to create logs directory:", error);
+  }
 }
 
 /**
@@ -46,8 +56,8 @@ const writeLog = (type, message, metadata = {}) => {
     }
   });
 
-  // Also output to console in development
-  if (process.env.NODE_ENV !== "production") {
+  // Also output to console in development OR on Vercel
+  if (process.env.NODE_ENV !== "production" || isVercel) {
     const consoleMethod = type === "ERROR" ? "error" : "log";
     console[consoleMethod](`[${timestamp}] ${type}: ${message}`, metadata);
   }

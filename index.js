@@ -66,6 +66,8 @@ app.use('/uploads', express.static(uploadsPath));
 // Database Connection
 let cachedPromise = null;
 
+const isVercel = process.env.VERCEL === "1";
+
 const connectToDatabase = async () => {
   if (!process.env.MONGO_URL) {
     const error = new Error("MONGO_URL muhit o'zgaruvchisi topilmadi!");
@@ -84,9 +86,21 @@ const connectToDatabase = async () => {
       })
       .then((mongoose) => {
         console.log("MongoDB-ga muvaffaqiyatli ulanish hosil qilindi!");
-        seedDefaultUsers();
-        initCronJobs();
-        BotManager.init();
+        
+        // Background tasks should be handled carefully on Vercel
+        if (!isVercel) {
+          seedDefaultUsers();
+          initCronJobs();
+          BotManager.init();
+        } else {
+          console.log("Vercel muhitida: Cron job-lar va Polling bot-lar cheklangan bo'lishi mumkin.");
+          // Still seed default users if needed, but maybe do it once
+          seedDefaultUsers();
+          // Note: BotManager.init() might start polling which doesn't work well on Vercel
+          // If the user wants to use a bot on Vercel, Webhooks are recommended.
+          BotManager.init(); 
+        }
+        
         return mongoose;
       })
       .catch((error) => {
