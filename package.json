@@ -6,9 +6,10 @@
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js",
-    "seed": "node src/core/seeding/run-basic-seed.js",
-    "backup:run": "node src/core/backup/run-backup.js",
-    "backup:restore": "node src/core/backup/restore-backup.js"
+    "seed": "node run-basic-seed.js",
+    "migrate": "node scripts/migration.js",
+    "backup:run": "node scripts/run-backup.js",
+    "backup:restore": "node scripts/restore-backup.js"
   },
   "author": "WeebDevs",
   "license": "ISC",

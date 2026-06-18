@@ -5,20 +5,72 @@ const cors = require("cors");
 const helmet = require("helmet");
 const cookieParser = require("cookie-parser");
 const mongoose = require("mongoose");
-const seedDefaultUsers = require("./src/core/seeding/basic-seed");
-const initCronJobs = require("./src/core/cronJobs");
-const sanitizeInput = require("./src/shared/middlewares/sanitizeInput");
-const { apiLimiter } = require("./src/shared/middlewares/rateLimiters");
-const requestLogger = require("./src/shared/middlewares/requestLogger");
-const { resolveUploadsDir } = require("./src/shared/services/storagePaths");
-const globalErrorHandler = require("./src/shared/errors/globalErrorHandler");
-const v2Router = require("./src/app");
-const BotManager = require("./src/bot/BotManager");
+const seedDefaultUsers = require("./helper/basic-seed"); // Import basic seeding helper
+const initCronJobs = require("./cronJobs"); // Import cron jobs
+const os = require("os");
+const sanitizeInput = require("./middleware/sanitizeInput");
+const { apiLimiter } = require("./middleware/rateLimiters");
+const { resolveUploadsDir } = require("./services/storagePaths");
 
 const app = express();
 app.disable("x-powered-by");
 
-// Security Headers
+const warnOnWeakSecurityConfig = () => {
+  const weakSecrets = [];
+
+  if (!process.env.JWT_SECRET_KEY || process.env.JWT_SECRET_KEY.length < 24) {
+    weakSecrets.push("JWT_SECRET_KEY");
+  }
+
+  if (!process.env.REFRESH_TOKEN_SECRET || process.env.REFRESH_TOKEN_SECRET.length < 24) {
+    weakSecrets.push("REFRESH_TOKEN_SECRET");
+  }
+
+  if (weakSecrets.length > 0) {
+    console.warn(`Security warning: weak or missing secrets detected: ${weakSecrets.join(", ")}`);
+  }
+
+  if (!process.env.CORS_ORIGIN) {
+    console.warn("Security warning: CORS_ORIGIN is not set, falling back to local development origins only.");
+  }
+};
+
+warnOnWeakSecurityConfig();
+
+const redactBody = (body) => {
+  if (!body || typeof body !== "object") {
+    return body;
+  }
+
+  const sensitiveKeys = new Set([
+    "password",
+    "currentPassword",
+    "newPassword",
+    "confirmPassword",
+    "refreshToken",
+    "accessToken",
+    "token",
+    "botToken",
+    "clientBotToken",
+  ]);
+
+  if (Array.isArray(body)) {
+    return body.map(redactBody);
+  }
+
+  return Object.fromEntries(
+    Object.entries(body).map(([key, value]) => [
+      key,
+      sensitiveKeys.has(key) ? "[REDACTED]" : redactBody(value),
+    ])
+  );
+};
+
+const allowedOrigins = (process.env.CORS_ORIGIN || "http://localhost:5173,http://localhost:3000")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
 app.use((req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("X-Frame-Options", "DENY");
@@ -32,47 +84,36 @@ app.use(
     contentSecurityPolicy: false,
   })
 );
-
-// Standard Middlewares
 app.use(express.json({ limit: "5mb" }));
 app.use(express.urlencoded({ limit: "5mb", extended: true }));
-
-const allowedOrigins = (process.env.CORS_ORIGIN || "http://localhost:5173")
-  .split(",")
-  .map((origin) => origin.trim())
-  .filter(Boolean);
-
 app.use(
   cors({
     origin(origin, callback) {
       if (!origin || allowedOrigins.includes(origin)) {
         return callback(null, true);
       }
+
       return callback(new Error("CORS origin not allowed"));
     },
     credentials: true,
   })
 );
-
 app.use(cookieParser());
 app.use(sanitizeInput);
 app.use(apiLimiter);
-app.use(requestLogger);
 
-// Static Files
+// Serve uploaded files statically
 const uploadsPath = resolveUploadsDir();
 app.use('/uploads', express.static(uploadsPath));
 
-// Database Connection
+//MongoDB Connecting
 let cachedPromise = null;
 
-const isVercel = process.env.VERCEL === "1";
+const BotManager = require("./Bot/BotManager");
 
 const connectToDatabase = async () => {
   if (!process.env.MONGO_URL) {
-    const error = new Error("MONGO_URL muhit o'zgaruvchisi topilmadi!");
-    console.error(error.message);
-    throw error;
+    throw new Error("MONGO_URL is not defined");
   }
 
   if (mongoose.connection.readyState === 1) {
@@ -82,30 +123,18 @@ const connectToDatabase = async () => {
   if (!cachedPromise) {
     cachedPromise = mongoose
       .connect(process.env.MONGO_URL, {
-        serverSelectionTimeoutMS: 5000,
+        serverSelectionTimeoutMS: 5000, // Fail quickly if mongo is down
       })
       .then((mongoose) => {
-        console.log("MongoDB-ga muvaffaqiyatli ulanish hosil qilindi!");
-        
-        // Background tasks should be handled carefully on Vercel
-        if (!isVercel) {
-          seedDefaultUsers();
-          initCronJobs();
-          BotManager.init();
-        } else {
-          console.log("Vercel muhitida: Cron job-lar va Polling bot-lar cheklangan bo'lishi mumkin.");
-          // Still seed default users if needed, but maybe do it once
-          seedDefaultUsers();
-          // Note: BotManager.init() might start polling which doesn't work well on Vercel
-          // If the user wants to use a bot on Vercel, Webhooks are recommended.
-          BotManager.init(); 
-        }
-        
+        console.log("Connected to MongoDB!");
+        seedDefaultUsers(); // Seed default users
+        initCronJobs(); // Initialize cron jobs
+        BotManager.init(); // Initialize bots after DB connection
         return mongoose;
       })
       .catch((error) => {
-        console.error("MongoDB ulanishda xatolik:", error.message);
-        cachedPromise = null;
+        console.error("MongoDB connection error:", error);
+        cachedPromise = null; // Reset promise on failure
         throw error;
       });
   }
@@ -113,8 +142,13 @@ const connectToDatabase = async () => {
   return cachedPromise;
 };
 
+// Middleware to ensure DB connection
 app.use(async (req, res, next) => {
-  if (req.path.startsWith('/uploads')) return next();
+  // Skip DB connection for static files or simple health checks if any
+  if (req.path.startsWith('/uploads')) {
+    return next();
+  }
+  
   try {
     await connectToDatabase();
     next();
@@ -123,17 +157,67 @@ app.use(async (req, res, next) => {
   }
 });
 
-// API Routes
-app.use("/api", v2Router);
+//connecting
+// app.listen moved to the end
 
-// Global Error Handler
-app.use(globalErrorHandler);
 
-// Start Server
+// Optional HTTP debug logging (disabled by default)
+const shouldLogHttp = process.env.DEBUG_HTTP === "true";
+app.use((req, res, next) => {
+  if (shouldLogHttp) {
+    console.log(`${req.method} ${req.url}`);
+    if (req.method !== "GET" && req.method !== "DELETE") {
+      console.log("Request Body:", redactBody(req.body));
+    }
+  }
+  next();
+});
+
+const ClientRoute = require("./Routers/Client.route");
+const CostsRoute = require("./Routers/Costs.route");
+const PaymentRoute = require("./Routers/Payment.route");
+const ProductRoute = require("./Routers/Product.route");
+const SellerRoute = require("./Routers/Seller.route");
+const ReturnedRoute = require("./Routers/Returned.route");
+const DebtsRoute = require("./Routers/Debts.route");
+const CashboxRoute = require("./Routers/Cashbox.route");
+const AuthRoute = require("./Routers/auth.route.js");
+const DashboardRoute = require("./Routers/Dashboard.route.js");
+const SupplierRoute = require("./Routers/Suppliers.route.js");
+app.use("/api/client", ClientRoute);
+app.use("/api/costs", CostsRoute);
+app.use("/api/payment", PaymentRoute);
+app.use("/api/product", ProductRoute);
+app.use("/api/bonus", require("./Routers/Bonus.route"));
+app.use("/api/seller", SellerRoute);
+app.use("/api/returned", ReturnedRoute);
+app.use("/api/debts", DebtsRoute);
+app.use("/api/cashbox", CashboxRoute);
+app.use("/api/auth", AuthRoute);
+app.use("/api/dashboard", DashboardRoute);
+app.use("/api/supplier", SupplierRoute);
+app.use("/api/inventory", require("./Routers/Inventory.route"));
+app.use("/api/bot-settings", require("./Routers/BotSettings.route"));
+app.use("/api/notifications", require("./Routers/Notification.route"));
+app.use("/api/check-settings", require("./Routers/CheckSetting.route"));
+app.use("/api/system", require("./Routers/System.route"));
+
+// Initialize Telegram Bots Manager (moved to connectToDatabase)
+// const BotManager = require("./Bot/BotManager");
+
+//errors
+app.use(function (err, req, res, next) {
+  console.error(err.message);
+  if (!err.statusCode) err.statusCode = 500;
+  res.status(err.statusCode).json({
+    message: err.statusCode >= 500 ? "Internal server error" : err.message,
+  });
+});
+
 if (require.main === module) {
   const PORT = process.env.PORT || 5000;
   app.listen(PORT, () => {
-    console.log(`Server http://localhost:${PORT} manzilida ishlamoqda`);
+    console.log(`Server is running on http://localhost:${PORT}`);
   });
 }
 
